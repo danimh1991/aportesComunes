@@ -1,5 +1,5 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, BarChart3, CalendarDays, ChevronDown, ChevronRight, CirclePlus, KeyRound, Landmark, Pencil, PiggyBank, Plus, Settings2, Trash2, UserRound, WalletCards, X } from "lucide-react";
+import { ArrowLeft, ArrowUpDown, BarChart3, CalendarDays, Check, ChevronDown, ChevronRight, CirclePlus, Download, FileSpreadsheet, KeyRound, Landmark, Pencil, PiggyBank, Plus, Settings2, Trash2, Upload, UserRound, X } from "lucide-react";
 
 declare global {
   interface Document {
@@ -15,6 +15,7 @@ type Rule = { id: number; year: number; destination_id: number; destination_name
 type Entry = { id: number; year: number; income_date: string; concept: string; person_id: number; person_name: string; amount: number; allocations: Record<string, number>; contribution: number };
 type Bootstrap = { year: number; years: number[]; people: Person[]; destinations: Destination[]; rules: Rule[]; entries: Entry[]; summary: { total: number; destinations: Destination[]; people: Person[] } };
 type IncomeForm = { date: string; concept: string; personId: string; amount: string };
+type ImportedIncome = { date: string; concept: string; personId: number; amount: number };
 type AuthState = "checking" | "locked" | "authenticated";
 
 class ApiError extends Error {
@@ -33,6 +34,41 @@ const today = () => {
   const now = new Date();
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
 };
+
+const csvCell = (value: string | number) => `"${String(value).replace(/"/g, '""')}"`;
+
+function parseCsv(text: string) {
+  const clean = text.replace(/^\uFEFF/, "");
+  const firstLine = clean.split(/\r?\n/, 1)[0] ?? "";
+  const delimiter = (firstLine.match(/;/g)?.length ?? 0) >= (firstLine.match(/,/g)?.length ?? 0) ? ";" : ",";
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let cell = "";
+  let quoted = false;
+
+  for (let index = 0; index < clean.length; index += 1) {
+    const character = clean[index];
+    if (quoted) {
+      if (character === '"' && clean[index + 1] === '"') { cell += '"'; index += 1; }
+      else if (character === '"') quoted = false;
+      else cell += character;
+    } else if (character === '"') quoted = true;
+    else if (character === delimiter) { row.push(cell.trim()); cell = ""; }
+    else if (character === "\n") { row.push(cell.trim()); if (row.some(Boolean)) rows.push(row); row = []; cell = ""; }
+    else if (character !== "\r") cell += character;
+  }
+  row.push(cell.trim());
+  if (row.some(Boolean)) rows.push(row);
+  return rows;
+}
+
+function csvAmount(value: string) {
+  const clean = value.replace(/[€\s\u00a0]/g, "");
+  if (clean.includes(",") && clean.includes(".")) {
+    return Number(clean.lastIndexOf(",") > clean.lastIndexOf(".") ? clean.replace(/\./g, "").replace(",", ".") : clean.replace(/,/g, ""));
+  }
+  return Number(clean.replace(",", "."));
+}
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${apiRoot()}${path}`, { ...init, headers: { "Content-Type": "application/json", ...init?.headers } });
@@ -55,12 +91,18 @@ export function App() {
   const [rulesOpen, setRulesOpen] = useState(false);
   const [yearOpen, setYearOpen] = useState(false);
   const [destinationOpen, setDestinationOpen] = useState(false);
+  const [dataOpen, setDataOpen] = useState(false);
+  const [importRows, setImportRows] = useState<ImportedIncome[]>([]);
+  const [importFileName, setImportFileName] = useState("");
+  const [importError, setImportError] = useState("");
+  const [importing, setImporting] = useState(false);
   const [selectedDestinationId, setSelectedDestinationId] = useState<number | null>(null);
   const [newYear, setNewYear] = useState(String(new Date().getFullYear() + 1));
   const [destinationForm, setDestinationForm] = useState({ name: "", color: destinationColors[0] });
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editingRuleId, setEditingRuleId] = useState<number | null>(null);
   const formRef = useRef<HTMLElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [form, setForm] = useState<IncomeForm>({ date: today(), concept: "", personId: "1", amount: "" });
   const [ruleForm, setRuleForm] = useState({ destinationId: "1", percentage: "", dateFrom: `${selectedYear}-01-01`, dateTo: `${selectedYear}-12-31`, personId: "" });
 
@@ -220,6 +262,68 @@ export function App() {
     } finally { setSaving(false); }
   };
 
+  const exportCsv = () => {
+    if (!data) return;
+    const lines = [
+      ["fecha", "concepto", "persona", "importe"].map(csvCell).join(";"),
+      ...data.entries.map((entry) => [entry.income_date, entry.concept, entry.person_name, entry.amount.toFixed(2).replace(".", ",")].map(csvCell).join(";")),
+    ];
+    const url = URL.createObjectURL(new Blob([`\uFEFF${lines.join("\r\n")}`], { type: "text/csv;charset=utf-8" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `aportes-${selectedYear}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+    setToast(`CSV de ${selectedYear} exportado`);
+  };
+
+  const readImportFile = async (file?: File) => {
+    setImportRows([]);
+    setImportError("");
+    setImportFileName(file?.name ?? "");
+    if (!file || !data) return;
+    try {
+      const rows = parseCsv(await file.text());
+      if (rows.length < 2) throw new Error("El archivo no contiene movimientos.");
+      const normalize = (value: string) => value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toLowerCase();
+      const headers = rows[0].map(normalize);
+      const columns = { date: headers.indexOf("fecha"), concept: headers.indexOf("concepto"), person: headers.indexOf("persona"), amount: headers.indexOf("importe") };
+      if (Object.values(columns).some((index) => index < 0)) throw new Error("Faltan las columnas fecha, concepto, persona o importe.");
+      const people = new Map(data.people.map((person) => [normalize(person.name), person.id]));
+      const parsed = rows.slice(1).map((cells, index) => {
+        const date = cells[columns.date]?.trim() ?? "";
+        const concept = cells[columns.concept]?.trim() ?? "";
+        const personName = normalize(cells[columns.person] ?? "");
+        const personId = people.get(personName);
+        const amount = csvAmount(cells[columns.amount] ?? "");
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || Number(date.slice(0, 4)) !== selectedYear) throw new Error(`La fecha de la fila ${index + 2} no pertenece a ${selectedYear}.`);
+        if (!concept || concept.length > 120) throw new Error(`Revisa el concepto de la fila ${index + 2}.`);
+        if (!personId) throw new Error(`La persona de la fila ${index + 2} no coincide con las personas de la aplicación.`);
+        if (!Number.isFinite(amount) || amount <= 0) throw new Error(`Revisa el importe de la fila ${index + 2}.`);
+        return { date, concept, personId, amount };
+      });
+      if (parsed.length > 500) throw new Error("Puedes importar un máximo de 500 movimientos cada vez.");
+      setImportRows(parsed);
+    } catch (problem) {
+      setImportError(problem instanceof Error ? problem.message : "No se pudo leer el archivo.");
+    }
+  };
+
+  const importCsv = async () => {
+    setImporting(true);
+    setImportError("");
+    try {
+      const result = await api<{ imported: number; skipped: number }>("/incomes/import", { method: "POST", body: JSON.stringify({ year: selectedYear, entries: importRows }) });
+      setDataOpen(false);
+      setImportRows([]);
+      setImportFileName("");
+      setToast(result.skipped ? `${result.imported} importados · ${result.skipped} duplicados omitidos` : `${result.imported} movimientos importados`);
+      await load(selectedYear);
+    } catch (problem) {
+      setImportError(problem instanceof Error ? problem.message : "No se pudieron importar los movimientos.");
+    } finally { setImporting(false); }
+  };
+
   const unlock = async (event: FormEvent) => {
     event.preventDefault();
     setPinSubmitting(true);
@@ -344,7 +448,7 @@ export function App() {
           </section>
 
           <section className="panel movements-panel">
-            <div className="panel-title"><div><p className="eyebrow">Historial</p><h2>Movimientos de {selectedYear}</h2></div><span className="record-count">{data.entries.length} registros</span></div>
+            <div className="panel-title"><div><p className="eyebrow">Historial</p><h2>Movimientos de {selectedYear}</h2></div><div className="history-actions"><span className="record-count">{data.entries.length} registros</span><button className="data-button" onClick={() => { setImportRows([]); setImportFileName(""); setImportError(""); setDataOpen(true); }}><ArrowUpDown size={14} /> Importar / exportar</button></div></div>
             {data.entries.length ? <div className="table-wrap"><table><thead><tr><th>Fecha</th><th>Concepto</th><th>Quién</th><th>Ganado</th>{activeDestinations.map((destination) => <th key={destination.id}>{destination.name}</th>)}<th>Total</th><th><span className="sr-only">Acciones</span></th></tr></thead><tbody>{data.entries.map((entry) => <tr key={entry.id}><td>{day.format(new Date(`${entry.income_date}T12:00:00`))}</td><td>{entry.concept}</td><td><span className={`person ${entry.person_name.toLowerCase()}`}>{entry.person_name}</span></td><td>{euro.format(entry.amount)}</td>{activeDestinations.map((destination) => <td key={destination.id}>{euro.format(entry.allocations[String(destination.id)] ?? 0)}</td>)}<td><strong>{euro.format(entry.contribution)}</strong></td><td><div className="row-actions"><button onClick={() => editIncome(entry)} aria-label={`Editar ${entry.concept}`}><Pencil size={15} /></button><button onClick={() => void deleteIncome(entry)} aria-label={`Eliminar ${entry.concept}`}><Trash2 size={15} /></button></div></td></tr>)}</tbody></table></div> : <div className="empty-state large"><CirclePlus size={24} /><b>Todavía no hay movimientos</b><span>Añade el primer ingreso de {selectedYear}.</span></div>}
           </section>
         </>}
@@ -355,6 +459,8 @@ export function App() {
       {destinationOpen && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.currentTarget === event.target) setDestinationOpen(false); }}><section className="modal destination-modal" role="dialog" aria-modal="true" aria-labelledby="destination-title"><button className="modal-close" onClick={() => setDestinationOpen(false)} aria-label="Cerrar"><X size={19} /></button><p className="eyebrow">Organiza el reparto</p><h2 id="destination-title">Nuevo destino</h2><p className="modal-intro">Ponle un nombre reconocible. Después podrás asignarle porcentajes desde las reglas.</p><form onSubmit={createDestination}><label><span>Nombre</span><input autoFocus required maxLength={60} placeholder="Ej. Vacaciones" value={destinationForm.name} onChange={(event) => setDestinationForm({ ...destinationForm, name: event.target.value })} /></label><fieldset><legend>Color</legend><div className="color-options">{destinationColors.map((color) => <label key={color} style={{ background: color }}><input type="radio" name="destination-color" value={color} checked={destinationForm.color === color} onChange={() => setDestinationForm({ ...destinationForm, color })} /><span className="sr-only">Color {color}</span></label>)}</div></fieldset><button className="primary-button" disabled={saving}>{saving ? "Creando…" : "Crear destino"}</button></form></section></div>}
 
       {destinationDetail && <div className="modal-backdrop detail-backdrop" role="presentation" onMouseDown={(event) => { if (event.currentTarget === event.target) setSelectedDestinationId(null); }}><section className="modal destination-detail" role="dialog" aria-modal="true" aria-labelledby="detail-title"><button className="detail-back" onClick={() => setSelectedDestinationId(null)}><ArrowLeft size={18} /> Volver</button><div className="detail-hero"><span className="destination-icon detail-icon" style={{ background: destinationDetail.destination.color }}>{destinationDetail.destination.name.slice(0, 1).toUpperCase()}</span><div><p className="eyebrow">Destino · {selectedYear}</p><h2 id="detail-title">{destinationDetail.destination.name}</h2></div><strong>{euro.format(destinationDetail.destination.total ?? 0)}</strong></div><div className="detail-stats"><article><BarChart3 size={18} /><span>Total anual</span><strong>{euro.format(destinationDetail.destination.total ?? 0)}</strong></article><article><UserRound size={18} /><span>Personas</span><strong>{destinationDetail.people.length}</strong></article><article><CalendarDays size={18} /><span>Movimientos</span><strong>{destinationDetail.entries.length}</strong></article></div><section className="detail-section"><div className="detail-heading"><div><p className="eyebrow">Evolución</p><h3>Resumen por mes</h3></div></div><div className="month-chart">{destinationDetail.months.map((item) => <div className="month-column" key={item.key}><span>{item.total ? euro.format(item.total) : ""}</span><div><i style={{ height: `${destinationDetail.maxMonth ? Math.max(5, item.total / destinationDetail.maxMonth * 100) : 0}%`, background: destinationDetail.destination.color }} /></div><b>{item.label}</b></div>)}</div></section><section className="detail-section"><div className="detail-heading"><div><p className="eyebrow">Participación</p><h3>Quién ha aportado</h3></div></div><div className="people-breakdown">{destinationDetail.people.length ? destinationDetail.people.map((person) => <div key={person.id}><span className="person-avatar">{person.name.slice(0, 1)}</span><p><b>{person.name}</b><small>{percent.format(person.share ?? 0)} del destino</small></p><strong>{euro.format(person.total ?? 0)}</strong></div>) : <p className="empty-state">Todavía no hay aportaciones.</p>}</div></section><section className="detail-section"><div className="detail-heading"><div><p className="eyebrow">Actividad</p><h3>Últimos movimientos</h3></div><span className="record-count">{destinationDetail.entries.length} registros</span></div><div className="detail-movements">{destinationDetail.entries.slice(0, 8).map((entry) => <div key={entry.id}><span>{day.format(new Date(`${entry.income_date}T12:00:00`))}</span><p><b>{entry.concept}</b><small>{entry.person_name}</small></p><strong>{euro.format(entry.allocations[String(destinationDetail.destination.id)] ?? 0)}</strong></div>)}</div></section></section></div>}
+
+      {dataOpen && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.currentTarget === event.target) setDataOpen(false); }}><section className="modal data-modal" role="dialog" aria-modal="true" aria-labelledby="data-title"><button className="modal-close" onClick={() => setDataOpen(false)} aria-label="Cerrar"><X size={19} /></button><p className="eyebrow">Movimientos de {selectedYear}</p><h2 id="data-title">Importar o exportar</h2><p className="modal-intro">Usa un CSV sencillo para mover los ingresos. Las reglas y destinos no cambian.</p><div className="data-options"><button className="data-option" onClick={exportCsv}><span className="data-option-icon"><Download size={19} /></span><span><b>Exportar CSV</b><small>Descarga {data?.entries.length ?? 0} movimientos de {selectedYear}</small></span><ChevronRight size={17} /></button><input ref={fileInputRef} className="sr-only" type="file" accept=".csv,text/csv" onClick={(event) => { event.currentTarget.value = ""; }} onChange={(event) => void readImportFile(event.target.files?.[0])} /><button className="data-option" onClick={() => fileInputRef.current?.click()}><span className="data-option-icon"><Upload size={19} /></span><span><b>Importar CSV</b><small>Columnas: fecha, concepto, persona e importe</small></span><ChevronRight size={17} /></button></div>{importFileName && <div className={`import-status ${importError ? "has-error" : ""}`}><FileSpreadsheet size={20} /><div><b>{importFileName}</b>{importError ? <span>{importError}</span> : <span><Check size={14} /> {importRows.length} movimientos listos</span>}</div>{!importError && <button className="import-button" disabled={importing || !importRows.length} onClick={() => void importCsv()}>{importing ? "Importando…" : "Importar"}</button>}</div>}<p className="data-note">Los movimientos ya existentes se omiten para evitar duplicados.</p></section></div>}
 
       {yearOpen && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.currentTarget === event.target) setYearOpen(false); }}><section className="modal year-modal" role="dialog" aria-modal="true" aria-labelledby="year-title"><button className="modal-close" onClick={() => setYearOpen(false)} aria-label="Cerrar"><X size={19} /></button><p className="eyebrow">Nuevo ejercicio</p><h2 id="year-title">Crear un año</h2><p className="modal-intro">El año se crea vacío. Después puedes definir sus reglas de reparto.</p><form onSubmit={createYear}><label><span>Año</span><input type="number" min="2000" max="2200" required value={newYear} onChange={(event) => setNewYear(event.target.value)} /></label><button className="primary-button">Crear año</button></form></section></div>}
       {toast && <div className="toast" role="status">{toast}</div>}

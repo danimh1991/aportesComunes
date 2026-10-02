@@ -143,6 +143,48 @@ async function handleApi(request: Request, env: Env, path: string) {
     return json({ id: result.meta.last_row_id }, 201);
   }
 
+  if (path === "/api/incomes/import" && request.method === "POST") {
+    const body = await parseBody(request);
+    const year = positiveInt(body.year, "El año");
+    const entries = Array.isArray(body.entries) ? body.entries as Record<string, unknown>[] : [];
+    if (year < 2000 || year > 2200) return fail("El año no es válido.");
+    if (!entries.length || entries.length > 500) return fail("Incluye entre 1 y 500 movimientos.");
+
+    const peopleResult = await env.DB.prepare("SELECT id FROM people").all<{ id: number }>();
+    const people = new Set(peopleResult.results.map((person) => person.id));
+    const normalized = entries.map((entry, index) => {
+      const date = validDate(entry.date, `La fecha de la fila ${index + 2}`);
+      const concept = String(entry.concept ?? "").trim();
+      const personId = positiveInt(entry.personId, `La persona de la fila ${index + 2}`);
+      const amountCents = Math.round(Number(entry.amount) * 100);
+      if (Number(date.slice(0, 4)) !== year) throw new Error(`La fecha de la fila ${index + 2} no pertenece a ${year}.`);
+      if (!concept || concept.length > 120) throw new Error(`Revisa el concepto de la fila ${index + 2}.`);
+      if (!people.has(personId)) throw new Error(`La persona de la fila ${index + 2} no existe.`);
+      if (!Number.isSafeInteger(amountCents) || amountCents <= 0) throw new Error(`Revisa el importe de la fila ${index + 2}.`);
+      return { date, concept, personId, amountCents };
+    });
+
+    const existingResult = await env.DB.prepare("SELECT income_date, concept, person_id, amount_cents FROM incomes WHERE year = ?").bind(year).all<{ income_date: string; concept: string; person_id: number; amount_cents: number }>();
+    const keys = new Set(existingResult.results.map((entry) => `${entry.income_date}\u0000${entry.concept}\u0000${entry.person_id}\u0000${entry.amount_cents}`));
+    const unique = normalized.filter((entry) => {
+      const key = `${entry.date}\u0000${entry.concept}\u0000${entry.personId}\u0000${entry.amountCents}`;
+      if (keys.has(key)) return false;
+      keys.add(key);
+      return true;
+    });
+    if (unique.length) {
+      const inserts: D1PreparedStatement[] = [];
+      for (let offset = 0; offset < unique.length; offset += 20) {
+        const chunk = unique.slice(offset, offset + 20);
+        const placeholders = chunk.map(() => "(?, ?, ?, ?, ?)").join(", ");
+        const values = chunk.flatMap((entry) => [year, entry.date, entry.concept, entry.personId, entry.amountCents]);
+        inserts.push(env.DB.prepare(`INSERT INTO incomes (year, income_date, concept, person_id, amount_cents) VALUES ${placeholders}`).bind(...values));
+      }
+      await env.DB.batch([env.DB.prepare("INSERT OR IGNORE INTO years (year) VALUES (?)").bind(year), ...inserts]);
+    }
+    return json({ imported: unique.length, skipped: entries.length - unique.length }, 201);
+  }
+
   const incomeMatch = path.match(/^\/api\/incomes\/(\d+)$/);
   if (incomeMatch && request.method === "PUT") {
     const body = await parseBody(request);
