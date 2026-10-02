@@ -82,6 +82,12 @@ main { max-width: 1240px; margin: 0 auto; padding: 40px 24px 64px; }
 .detail-section { padding: 22px 0; border-top: 1px solid #e9eef1; }
 .detail-heading { display: flex; align-items: end; justify-content: space-between; margin-bottom: 18px; }
 .detail-heading h3 { margin: 4px 0 0; color: var(--navy); font: 700 18px Manrope,sans-serif; }
+.destination-rules { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 10px; }
+.destination-rules article { display: flex; align-items: stretch; gap: 11px; padding: 13px; border: 1px solid var(--line); border-radius: 12px; background: #f8fafb; }
+.destination-rules i { width: 5px; flex: 0 0 5px; border-radius: 4px; }
+.destination-rules b,.destination-rules span { display: block; }
+.destination-rules b { color: var(--navy); font-size: 14px; }
+.destination-rules span { margin-top: 4px; color: #7b8c9a; font-size: 12px; }
 .month-chart { height: 175px; display: grid; grid-template-columns: repeat(12,minmax(26px,1fr)); gap: 6px; align-items: end; padding-top: 28px; }
 .month-column { min-width: 0; height: 100%; display: grid; grid-template-rows: 20px 1fr 18px; gap: 4px; text-align: center; }
 .month-column > span { color: #75899a; font-size: 9px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -98,4 +104,4 @@ main { max-width: 1240px; margin: 0 auto; padding: 40px 24px 64px; }
 .detail-movements > div > span { width: 50px; color: #718496; font-size: 12px; }
 .detail-movements b { color: var(--navy); font-size: 14px; }
 @keyframes detail-in { from { transform: translateX(28px); opacity: 0; } }
-@media (max-width: 620px) { .destination-detail { border-radius: 0; padding: 24px 17px 38px; }.detail-hero { grid-template-columns: auto 1fr; }.detail-hero > strong { grid-column: 1/-1; font-size: 24px; }.detail-stats { grid-template-columns: 1fr; }.month-chart { gap: 3px; overflow-x: auto; grid-template-columns: repeat(12,minmax(30px,1fr)); }.month-column > span { display: none; } }
+@media (max-width: 620px) { .destination-detail { border-radius: 0; padding: 24px 17px 38px; }.detail-hero { grid-template-columns: auto 1fr; }.detail-hero > strong { grid-column: 1/-1; font-size: 24px; }.detail-stats { grid-template-columns: 1fr; }.destination-rules { grid-template-columns: 1fr; }.month-chart { gap: 5px; overflow-x: auto; grid-template-columns: repeat(12,64px); padding-top: 28px; }.month-column > span { overflow: visible; font-size: 9px; text-overflow: clip; }.detail-heading { align-items: start; gap: 12px; } }
