@@ -1,5 +1,5 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { CalendarDays, ChevronDown, CirclePlus, KeyRound, Landmark, Pencil, PiggyBank, Plus, Settings2, Trash2, WalletCards, X } from "lucide-react";
+import { ArrowLeft, BarChart3, CalendarDays, ChevronDown, ChevronRight, CirclePlus, KeyRound, Landmark, Pencil, PiggyBank, Plus, Settings2, Trash2, UserRound, WalletCards, X } from "lucide-react";
 
 declare global {
   interface Document {
@@ -26,6 +26,8 @@ class ApiError extends Error {
 const euro = new Intl.NumberFormat("es-ES", { style: "currency", currency: "EUR" });
 const percent = new Intl.NumberFormat("es-ES", { style: "percent", maximumFractionDigits: 1 });
 const day = new Intl.DateTimeFormat("es-ES", { day: "2-digit", month: "short" });
+const month = new Intl.DateTimeFormat("es-ES", { month: "short" });
+const destinationColors = ["#20b99a", "#4a7ef0", "#f1a24d", "#a16ae8", "#eb6ca4", "#6c8da5"];
 const apiRoot = () => window.location.pathname.startsWith("/aportescomunes") ? "/aportescomunes/api" : "/api";
 const today = () => {
   const now = new Date();
@@ -52,8 +54,12 @@ export function App() {
   const [toast, setToast] = useState("");
   const [rulesOpen, setRulesOpen] = useState(false);
   const [yearOpen, setYearOpen] = useState(false);
+  const [destinationOpen, setDestinationOpen] = useState(false);
+  const [selectedDestinationId, setSelectedDestinationId] = useState<number | null>(null);
   const [newYear, setNewYear] = useState(String(new Date().getFullYear() + 1));
+  const [destinationForm, setDestinationForm] = useState({ name: "", color: destinationColors[0] });
   const [editingId, setEditingId] = useState<number | null>(null);
+  const [editingRuleId, setEditingRuleId] = useState<number | null>(null);
   const formRef = useRef<HTMLElement>(null);
   const [form, setForm] = useState<IncomeForm>({ date: today(), concept: "", personId: "1", amount: "" });
   const [ruleForm, setRuleForm] = useState({ destinationId: "1", percentage: "", dateFrom: `${selectedYear}-01-01`, dateTo: `${selectedYear}-12-31`, personId: "" });
@@ -108,6 +114,25 @@ export function App() {
   }, [data, form.date, form.personId, numericAmount]);
   const previewTotal = allocations.reduce((sum, item) => sum + item.value, 0);
   const activeDestinations = useMemo(() => data?.summary.destinations.filter((destination) => (destination.total ?? 0) > 0 || data.rules.some((rule) => rule.destination_id === destination.id)) ?? [], [data]);
+  const destinationDetail = useMemo(() => {
+    if (!data || selectedDestinationId === null) return null;
+    const destination = data.summary.destinations.find((item) => item.id === selectedDestinationId);
+    if (!destination) return null;
+    const entries = data.entries.filter((entry) => (entry.allocations[String(destination.id)] ?? 0) > 0);
+    const people = data.people.map((person) => {
+      const total = entries.filter((entry) => entry.person_id === person.id).reduce((sum, entry) => sum + (entry.allocations[String(destination.id)] ?? 0), 0);
+      return { ...person, total, share: (destination.total ?? 0) ? total / (destination.total ?? 0) : 0 };
+    }).filter((person) => (person.total ?? 0) > 0);
+    const months = Array.from({ length: 12 }, (_, index) => {
+      const key = `${selectedYear}-${String(index + 1).padStart(2, "0")}`;
+      return {
+        key,
+        label: month.format(new Date(selectedYear, index, 1)).replace(".", ""),
+        total: entries.filter((entry) => entry.income_date.startsWith(key)).reduce((sum, entry) => sum + (entry.allocations[String(destination.id)] ?? 0), 0),
+      };
+    });
+    return { destination, entries, people, months, maxMonth: Math.max(...months.map((item) => item.total), 0) };
+  }, [data, selectedDestinationId, selectedYear]);
 
   const resetForm = () => {
     setForm({ date: `${selectedYear}-${today().slice(5)}`, concept: "", personId: String(data?.people[0]?.id ?? 1), amount: "" });
@@ -153,16 +178,46 @@ export function App() {
   const saveRule = async (event: FormEvent) => {
     event.preventDefault();
     try {
-      await api("/rules", { method: "POST", body: JSON.stringify({ year: selectedYear, destinationId: Number(ruleForm.destinationId), percentage: Number(ruleForm.percentage.replace(",", ".")), dateFrom: ruleForm.dateFrom, dateTo: ruleForm.dateTo, personId: ruleForm.personId ? Number(ruleForm.personId) : null }) });
-      setRuleForm((current) => ({ ...current, percentage: "" }));
-      setToast("Regla añadida"); await load(selectedYear);
+      const payload = { year: selectedYear, destinationId: Number(ruleForm.destinationId), percentage: Number(ruleForm.percentage.replace(",", ".")), dateFrom: ruleForm.dateFrom, dateTo: ruleForm.dateTo, personId: ruleForm.personId ? Number(ruleForm.personId) : null };
+      await api(editingRuleId ? `/rules/${editingRuleId}` : "/rules", { method: editingRuleId ? "PUT" : "POST", body: JSON.stringify(payload) });
+      setRuleForm((current) => editingRuleId
+        ? { destinationId: current.destinationId, percentage: "", dateFrom: `${selectedYear}-01-01`, dateTo: `${selectedYear}-12-31`, personId: "" }
+        : { ...current, percentage: "" });
+      setEditingRuleId(null);
+      setToast(editingRuleId ? "Regla actualizada y aportes recalculados" : "Regla añadida"); await load(selectedYear);
     } catch (problem) { setError(problem instanceof Error ? problem.message : "No se pudo guardar la regla."); }
+  };
+
+  const editRule = (rule: Rule) => {
+    setEditingRuleId(rule.id);
+    setRuleForm({ destinationId: String(rule.destination_id), percentage: String(rule.rate_bps / 100).replace(".", ","), dateFrom: rule.date_from, dateTo: rule.date_to, personId: rule.person_id ? String(rule.person_id) : "" });
+  };
+
+  const cancelRuleEdit = () => {
+    setEditingRuleId(null);
+    setRuleForm({ destinationId: String(data?.destinations[0]?.id ?? 1), percentage: "", dateFrom: `${selectedYear}-01-01`, dateTo: `${selectedYear}-12-31`, personId: "" });
   };
 
   const deleteRule = async (rule: Rule) => {
     if (!window.confirm(`¿Eliminar la regla de ${rule.destination_name}?`)) return;
     try { await api(`/rules/${rule.id}`, { method: "DELETE" }); setToast("Regla eliminada"); await load(selectedYear); }
     catch (problem) { setError(problem instanceof Error ? problem.message : "No se pudo eliminar la regla."); }
+  };
+
+  const createDestination = async (event: FormEvent) => {
+    event.preventDefault();
+    setSaving(true);
+    setError("");
+    try {
+      const result = await api<{ id: number }>("/destinations", { method: "POST", body: JSON.stringify(destinationForm) });
+      setRuleForm((current) => ({ ...current, destinationId: String(result.id) }));
+      setDestinationForm({ name: "", color: destinationColors[(data?.destinations.length ?? 0) % destinationColors.length] });
+      setDestinationOpen(false);
+      setToast("Destino creado");
+      await load(selectedYear);
+    } catch (problem) {
+      setError(problem instanceof Error ? problem.message : "No se pudo crear el destino.");
+    } finally { setSaving(false); }
   };
 
   const unlock = async (event: FormEvent) => {
@@ -190,6 +245,11 @@ export function App() {
         name: "read_contribution_summary", title: "Consultar resumen de aportes", description: "Consulta los totales y el reparto del año visible.",
         inputSchema: { type: "object", properties: {}, additionalProperties: false }, annotations: { readOnlyHint: true, untrustedContentHint: false },
         execute: async () => ({ year: selectedYear, total: data?.summary.total ?? 0, people: data?.summary.people ?? [], destinations: activeDestinations }),
+      }, { signal: lifecycle.signal });
+      await context.registerTool({
+        name: "create_destination", title: "Crear destino", description: "Crea un nuevo destino para poder usarlo en reglas de reparto.",
+        inputSchema: { type: "object", properties: { name: { type: "string", minLength: 1, maxLength: 60 }, color: { type: "string", pattern: "^#[0-9A-Fa-f]{6}$" } }, required: ["name", "color"], additionalProperties: false }, annotations: { readOnlyHint: false, untrustedContentHint: false },
+        execute: async (input: unknown) => { const item = input as { name: string; color: string }; const result = await api<{ id: number }>("/destinations", { method: "POST", body: JSON.stringify(item) }); await load(selectedYear); return { id: result.id, status: "creado" }; },
       }, { signal: lifecycle.signal });
       await context.registerTool({
         name: "create_income", title: "Añadir ingreso", description: "Guarda un ingreso y actualiza el reparto visible según las reglas del año.",
@@ -255,8 +315,7 @@ export function App() {
         {error && <div className="error-banner" role="alert">{error}<button onClick={() => setError("")} aria-label="Cerrar"><X size={16} /></button></div>}
         {loading && !data ? <div className="loading-card">Cargando aportes…</div> : data && <>
           <section className="summary-grid" aria-label="Resumen de aportes">
-            <article className="summary-card dark"><p>Total aportado</p><strong>{euro.format(data.summary.total)}</strong><span>{data.summary.people.map((person) => `${percent.format(person.share ?? 0)} ${person.name}`).join(" · ") || "Sin movimientos"}</span></article>
-            {data.summary.people.map((person, index) => <article className="summary-card" key={person.id}><p>{person.name}</p><strong>{euro.format(person.total ?? 0)}</strong><div className={`progress ${index % 2 ? "coral" : ""}`}><i style={{ width: `${(person.share ?? 0) * 100}%` }} /></div><span>{percent.format(person.share ?? 0)} del total · {euro.format(person.income ?? 0)} ganado</span></article>)}
+            <article className="summary-card dark total-card"><p>Total aportado</p><strong>{euro.format(data.summary.total)}</strong><div className="summary-contributors">{data.summary.people.length ? data.summary.people.map((person) => <span key={person.id}>{percent.format(person.share ?? 0)} {person.name}<small>{euro.format(person.total ?? 0)}</small></span>) : <span>Sin movimientos</span>}</div></article>
           </section>
 
           <section className="workspace-grid">
@@ -278,8 +337,8 @@ export function App() {
             </article>
 
             <article className="panel destinations-panel">
-              <div className="panel-title"><div><p className="eyebrow">Destinos</p><h2>Acumulado de {selectedYear}</h2></div><WalletCards size={23} /></div>
-              <div className="destination-list">{activeDestinations.length ? activeDestinations.map((destination, index) => <div key={destination.id}><span className="destination-icon" style={{ background: destination.color }}>{index === 0 ? <Landmark size={19} /> : index === 1 ? <PiggyBank size={19} /> : destination.name.slice(0, 1)}</span><p><b>{destination.name}</b><small>{data.rules.filter((rule) => rule.destination_id === destination.id).length} regla(s)</small></p><strong>{euro.format(destination.total ?? 0)}</strong></div>) : <p className="empty-state">Añade una regla para empezar el reparto.</p>}</div>
+              <div className="panel-title"><div><p className="eyebrow">Destinos</p><h2>Acumulado de {selectedYear}</h2></div><button className="panel-icon-button" onClick={() => setDestinationOpen(true)} aria-label="Crear destino"><Plus size={19} /></button></div>
+              <div className="destination-list">{activeDestinations.length ? activeDestinations.map((destination, index) => <button type="button" key={destination.id} onClick={() => setSelectedDestinationId(destination.id)}><span className="destination-icon" style={{ background: destination.color }}>{index === 0 ? <Landmark size={19} /> : index === 1 ? <PiggyBank size={19} /> : destination.name.slice(0, 1).toUpperCase()}</span><p><b>{destination.name}</b><small>{data.rules.filter((rule) => rule.destination_id === destination.id).length} regla(s) · Ver detalle</small></p><strong>{euro.format(destination.total ?? 0)}</strong><ChevronRight size={17} aria-hidden="true" /></button>) : <p className="empty-state">Añade un destino y una regla para empezar el reparto.</p>}</div>
               <button className="text-button" onClick={() => setRulesOpen(true)}>Ver y editar reglas</button>
             </article>
           </section>
@@ -291,7 +350,11 @@ export function App() {
         </>}
       </main>
 
-      {rulesOpen && data && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.currentTarget === event.target) setRulesOpen(false); }}><section className="modal rules-modal" role="dialog" aria-modal="true" aria-labelledby="rules-title"><button className="modal-close" onClick={() => setRulesOpen(false)} aria-label="Cerrar"><X size={19} /></button><p className="eyebrow">Configuración de {selectedYear}</p><h2 id="rules-title">Reglas de reparto</h2><p className="modal-intro">Cada ingreso aplica las reglas activas en su fecha. Las reglas para una persona se suman a las de “Ambos”.</p><form className="rule-form" onSubmit={saveRule}><label><span>Destino</span><select value={ruleForm.destinationId} onChange={(event) => setRuleForm({ ...ruleForm, destinationId: event.target.value })}>{data.destinations.map((destination) => <option value={destination.id} key={destination.id}>{destination.name}</option>)}</select></label><label><span>Porcentaje</span><div className="suffix-input"><input required inputMode="decimal" placeholder="7" value={ruleForm.percentage} onChange={(event) => setRuleForm({ ...ruleForm, percentage: event.target.value })} /><b>%</b></div></label><label><span>Desde</span><input type="date" required value={ruleForm.dateFrom} onChange={(event) => setRuleForm({ ...ruleForm, dateFrom: event.target.value })} /></label><label><span>Hasta</span><input type="date" required value={ruleForm.dateTo} onChange={(event) => setRuleForm({ ...ruleForm, dateTo: event.target.value })} /></label><label className="wide"><span>Aplica a</span><select value={ruleForm.personId} onChange={(event) => setRuleForm({ ...ruleForm, personId: event.target.value })}><option value="">Ambos</option>{data.people.map((person) => <option value={person.id} key={person.id}>{person.name}</option>)}</select></label><button className="primary-button wide"><Plus size={16} /> Añadir regla</button></form><div className="rules-list">{data.rules.map((rule) => <div className="rule-row" key={rule.id}><i style={{ background: data.destinations.find((item) => item.id === rule.destination_id)?.color }} /><div><b>{rule.destination_name} · {(rule.rate_bps / 100).toLocaleString("es-ES")}%</b><span>{rule.date_from.split("-").reverse().join("/")} – {rule.date_to.split("-").reverse().join("/")} · {rule.person_name ?? "Ambos"}</span></div><button onClick={() => void deleteRule(rule)} aria-label={`Eliminar regla ${rule.destination_name}`}><Trash2 size={16} /></button></div>)}</div></section></div>}
+      {rulesOpen && data && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.currentTarget === event.target) { setRulesOpen(false); cancelRuleEdit(); } }}><section className="modal rules-modal" role="dialog" aria-modal="true" aria-labelledby="rules-title"><button className="modal-close" onClick={() => { setRulesOpen(false); cancelRuleEdit(); }} aria-label="Cerrar"><X size={19} /></button><p className="eyebrow">Configuración de {selectedYear}</p><h2 id="rules-title">{editingRuleId ? "Editar regla" : "Reglas de reparto"}</h2><p className="modal-intro">{editingRuleId ? "Los movimientos ya guardados se recalcularán al guardar los cambios." : "Cada ingreso aplica las reglas activas en su fecha. Las reglas para una persona se suman a las de “Ambos”."}</p><form className="rule-form" onSubmit={saveRule}><label><span>Destino</span><div className="select-with-action"><select value={ruleForm.destinationId} onChange={(event) => setRuleForm({ ...ruleForm, destinationId: event.target.value })}>{data.destinations.map((destination) => <option value={destination.id} key={destination.id}>{destination.name}</option>)}</select><button type="button" onClick={() => { setRulesOpen(false); setDestinationOpen(true); }} aria-label="Crear destino"><Plus size={18} /></button></div></label><label><span>Porcentaje</span><div className="suffix-input"><input required inputMode="decimal" placeholder="7" value={ruleForm.percentage} onChange={(event) => setRuleForm({ ...ruleForm, percentage: event.target.value })} /><b>%</b></div></label><label><span>Desde</span><input type="date" required value={ruleForm.dateFrom} onChange={(event) => setRuleForm({ ...ruleForm, dateFrom: event.target.value })} /></label><label><span>Hasta</span><input type="date" required value={ruleForm.dateTo} onChange={(event) => setRuleForm({ ...ruleForm, dateTo: event.target.value })} /></label><label className="wide"><span>Aplica a</span><select value={ruleForm.personId} onChange={(event) => setRuleForm({ ...ruleForm, personId: event.target.value })}><option value="">Ambos</option>{data.people.map((person) => <option value={person.id} key={person.id}>{person.name}</option>)}</select></label><div className="rule-form-actions wide">{editingRuleId && <button type="button" className="cancel-button" onClick={cancelRuleEdit}>Cancelar</button>}<button className="primary-button"><Pencil size={16} /> {editingRuleId ? "Guardar cambios" : "Añadir regla"}</button></div></form><div className="rules-list">{data.rules.map((rule) => <div className={`rule-row ${editingRuleId === rule.id ? "editing" : ""}`} key={rule.id}><i style={{ background: data.destinations.find((item) => item.id === rule.destination_id)?.color }} /><div><b>{rule.destination_name} · {(rule.rate_bps / 100).toLocaleString("es-ES")}%</b><span>{rule.date_from.split("-").reverse().join("/")} – {rule.date_to.split("-").reverse().join("/")} · {rule.person_name ?? "Ambos"}</span></div><div className="rule-actions"><button onClick={() => editRule(rule)} aria-label={`Editar regla ${rule.destination_name}`}><Pencil size={16} /></button><button onClick={() => void deleteRule(rule)} aria-label={`Eliminar regla ${rule.destination_name}`}><Trash2 size={16} /></button></div></div>)}</div></section></div>}
+
+      {destinationOpen && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.currentTarget === event.target) setDestinationOpen(false); }}><section className="modal destination-modal" role="dialog" aria-modal="true" aria-labelledby="destination-title"><button className="modal-close" onClick={() => setDestinationOpen(false)} aria-label="Cerrar"><X size={19} /></button><p className="eyebrow">Organiza el reparto</p><h2 id="destination-title">Nuevo destino</h2><p className="modal-intro">Ponle un nombre reconocible. Después podrás asignarle porcentajes desde las reglas.</p><form onSubmit={createDestination}><label><span>Nombre</span><input autoFocus required maxLength={60} placeholder="Ej. Vacaciones" value={destinationForm.name} onChange={(event) => setDestinationForm({ ...destinationForm, name: event.target.value })} /></label><fieldset><legend>Color</legend><div className="color-options">{destinationColors.map((color) => <label key={color} style={{ background: color }}><input type="radio" name="destination-color" value={color} checked={destinationForm.color === color} onChange={() => setDestinationForm({ ...destinationForm, color })} /><span className="sr-only">Color {color}</span></label>)}</div></fieldset><button className="primary-button" disabled={saving}>{saving ? "Creando…" : "Crear destino"}</button></form></section></div>}
+
+      {destinationDetail && <div className="modal-backdrop detail-backdrop" role="presentation" onMouseDown={(event) => { if (event.currentTarget === event.target) setSelectedDestinationId(null); }}><section className="modal destination-detail" role="dialog" aria-modal="true" aria-labelledby="detail-title"><button className="detail-back" onClick={() => setSelectedDestinationId(null)}><ArrowLeft size={18} /> Volver</button><div className="detail-hero"><span className="destination-icon detail-icon" style={{ background: destinationDetail.destination.color }}>{destinationDetail.destination.name.slice(0, 1).toUpperCase()}</span><div><p className="eyebrow">Destino · {selectedYear}</p><h2 id="detail-title">{destinationDetail.destination.name}</h2></div><strong>{euro.format(destinationDetail.destination.total ?? 0)}</strong></div><div className="detail-stats"><article><BarChart3 size={18} /><span>Total anual</span><strong>{euro.format(destinationDetail.destination.total ?? 0)}</strong></article><article><UserRound size={18} /><span>Personas</span><strong>{destinationDetail.people.length}</strong></article><article><CalendarDays size={18} /><span>Movimientos</span><strong>{destinationDetail.entries.length}</strong></article></div><section className="detail-section"><div className="detail-heading"><div><p className="eyebrow">Evolución</p><h3>Resumen por mes</h3></div></div><div className="month-chart">{destinationDetail.months.map((item) => <div className="month-column" key={item.key}><span>{item.total ? euro.format(item.total) : ""}</span><div><i style={{ height: `${destinationDetail.maxMonth ? Math.max(5, item.total / destinationDetail.maxMonth * 100) : 0}%`, background: destinationDetail.destination.color }} /></div><b>{item.label}</b></div>)}</div></section><section className="detail-section"><div className="detail-heading"><div><p className="eyebrow">Participación</p><h3>Quién ha aportado</h3></div></div><div className="people-breakdown">{destinationDetail.people.length ? destinationDetail.people.map((person) => <div key={person.id}><span className="person-avatar">{person.name.slice(0, 1)}</span><p><b>{person.name}</b><small>{percent.format(person.share ?? 0)} del destino</small></p><strong>{euro.format(person.total ?? 0)}</strong></div>) : <p className="empty-state">Todavía no hay aportaciones.</p>}</div></section><section className="detail-section"><div className="detail-heading"><div><p className="eyebrow">Actividad</p><h3>Últimos movimientos</h3></div><span className="record-count">{destinationDetail.entries.length} registros</span></div><div className="detail-movements">{destinationDetail.entries.slice(0, 8).map((entry) => <div key={entry.id}><span>{day.format(new Date(`${entry.income_date}T12:00:00`))}</span><p><b>{entry.concept}</b><small>{entry.person_name}</small></p><strong>{euro.format(entry.allocations[String(destinationDetail.destination.id)] ?? 0)}</strong></div>)}</div></section></section></div>}
 
       {yearOpen && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.currentTarget === event.target) setYearOpen(false); }}><section className="modal year-modal" role="dialog" aria-modal="true" aria-labelledby="year-title"><button className="modal-close" onClick={() => setYearOpen(false)} aria-label="Cerrar"><X size={19} /></button><p className="eyebrow">Nuevo ejercicio</p><h2 id="year-title">Crear un año</h2><p className="modal-intro">El año se crea vacío. Después puedes definir sus reglas de reparto.</p><form onSubmit={createYear}><label><span>Año</span><input type="number" min="2000" max="2200" required value={newYear} onChange={(event) => setNewYear(event.target.value)} /></label><button className="primary-button">Crear año</button></form></section></div>}
       {toast && <div className="toast" role="status">{toast}</div>}

@@ -119,6 +119,16 @@ async function handleApi(request: Request, env: Env, path: string) {
     return json({ year }, 201);
   }
 
+  if (path === "/api/destinations" && request.method === "POST") {
+    const body = await parseBody(request);
+    const name = String(body.name ?? "").trim();
+    const color = String(body.color ?? "");
+    if (!name || name.length > 60) return fail("Escribe un nombre de hasta 60 caracteres.");
+    if (!/^#[0-9a-f]{6}$/i.test(color)) return fail("El color no es válido.");
+    const result = await env.DB.prepare("INSERT INTO destinations (name, color, sort_order) VALUES (?, ?, (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM destinations))").bind(name, color).run();
+    return json({ id: result.meta.last_row_id }, 201);
+  }
+
   if (path === "/api/incomes" && request.method === "POST") {
     const body = await parseBody(request);
     const date = validDate(body.date, "La fecha");
@@ -164,6 +174,20 @@ async function handleApi(request: Request, env: Env, path: string) {
   }
 
   const ruleMatch = path.match(/^\/api\/rules\/(\d+)$/);
+  if (ruleMatch && request.method === "PUT") {
+    const body = await parseBody(request);
+    const id = Number(ruleMatch[1]);
+    const year = positiveInt(body.year, "El año");
+    const destinationId = positiveInt(body.destinationId, "El destino");
+    const rateBps = Math.round(Number(body.percentage) * 100);
+    const dateFrom = validDate(body.dateFrom, "La fecha inicial");
+    const dateTo = validDate(body.dateTo, "La fecha final");
+    const personId = body.personId ? positiveInt(body.personId, "La persona") : null;
+    if (rateBps < 0 || rateBps > 10000 || dateFrom > dateTo) return fail("Revisa el porcentaje y las fechas.");
+    const result = await env.DB.prepare("UPDATE rules SET year = ?, destination_id = ?, rate_bps = ?, date_from = ?, date_to = ?, person_id = ? WHERE id = ?").bind(year, destinationId, rateBps, dateFrom, dateTo, personId, id).run();
+    if (!result.meta.changes) return fail("La regla ya no existe.", 404);
+    return json({ id });
+  }
   if (ruleMatch && request.method === "DELETE") {
     await env.DB.prepare("DELETE FROM rules WHERE id = ?").bind(Number(ruleMatch[1])).run();
     return json({ ok: true });
@@ -197,7 +221,8 @@ export default {
     } catch (error) {
       console.error(error);
       const message = error instanceof Error ? error.message : "No se pudo completar la operación.";
-      if (message.includes("UNIQUE constraint failed")) return fail("Ese año ya existe.", 409);
+      if (message.includes("UNIQUE constraint failed: years.year")) return fail("Ese año ya existe.", 409);
+      if (message.includes("UNIQUE constraint failed: destinations.name")) return fail("Ya existe un destino con ese nombre.", 409);
       return fail(message, 500);
     }
   },
