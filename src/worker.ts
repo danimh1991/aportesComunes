@@ -1,7 +1,7 @@
 interface Env {
   ASSETS: Fetcher;
   DB: D1Database;
-  APP_PASSWORD?: string;
+  APP_PIN?: string;
 }
 
 type Person = { id: number; name: string };
@@ -16,20 +16,23 @@ function apiPath(pathname: string) {
   return pathname.startsWith("/aportescomunes/") ? pathname.slice("/aportescomunes".length) : pathname;
 }
 
+const sessionCookie = "aportes_session";
+const configuredPin = (env: Env) => env.APP_PIN?.trim() || "0812";
+
 function isAuthorized(request: Request, env: Env) {
-  if (!env.APP_PASSWORD) return true;
-  const header = request.headers.get("Authorization");
-  if (!header?.startsWith("Basic ")) return false;
-  try {
-    const [, password] = atob(header.slice(6)).split(":", 2);
-    return password === env.APP_PASSWORD;
-  } catch {
-    return false;
-  }
+  const expectedCookie = `${sessionCookie}=${encodeURIComponent(configuredPin(env))}`;
+  return (request.headers.get("Cookie") ?? "").split(";").some((cookie) => cookie.trim() === expectedCookie);
 }
 
-function protectedResponse() {
-  return new Response("Acceso protegido", { status: 401, headers: { "WWW-Authenticate": 'Basic realm="Aportes comunes", charset="UTF-8"' } });
+function loginResponse(request: Request, env: Env) {
+  const secure = new URL(request.url).protocol === "https:" ? "; Secure" : "";
+  return new Response(JSON.stringify({ ok: true }), {
+    headers: {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json",
+      "Set-Cookie": `${sessionCookie}=${encodeURIComponent(configuredPin(env))}; Path=/; HttpOnly; SameSite=Strict${secure}`,
+    },
+  });
 }
 
 async function parseBody(request: Request): Promise<Record<string, unknown>> {
@@ -171,11 +174,19 @@ async function handleApi(request: Request, env: Env, path: string) {
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
-    if (!isAuthorized(request, env)) return protectedResponse();
     const url = new URL(request.url);
     const path = apiPath(url.pathname);
     try {
-      if (path.startsWith("/api/")) return await handleApi(request, env, path);
+      if (path === "/api/login" && request.method === "POST") {
+        const body = await parseBody(request);
+        if (String(body.pin ?? "") !== configuredPin(env)) return fail("El PIN no es correcto.", 401);
+        return loginResponse(request, env);
+      }
+      if (path.startsWith("/api/")) {
+        if (!isAuthorized(request, env)) return fail("Introduce el PIN para continuar.", 401);
+        if (path === "/api/session" && request.method === "GET") return json({ ok: true });
+        return await handleApi(request, env, path);
+      }
       if (url.pathname === "/aportescomunes") return Response.redirect(`${url.origin}/aportescomunes/`, 308);
       if (url.pathname.startsWith("/aportescomunes/")) {
         const assetUrl = new URL(request.url);

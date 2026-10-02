@@ -1,5 +1,5 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { CalendarDays, ChevronDown, CirclePlus, Landmark, Pencil, PiggyBank, Plus, Settings2, Trash2, WalletCards, X } from "lucide-react";
+import { CalendarDays, ChevronDown, CirclePlus, KeyRound, Landmark, Pencil, PiggyBank, Plus, Settings2, Trash2, WalletCards, X } from "lucide-react";
 
 declare global {
   interface Document {
@@ -15,6 +15,13 @@ type Rule = { id: number; year: number; destination_id: number; destination_name
 type Entry = { id: number; year: number; income_date: string; concept: string; person_id: number; person_name: string; amount: number; allocations: Record<string, number>; contribution: number };
 type Bootstrap = { year: number; years: number[]; people: Person[]; destinations: Destination[]; rules: Rule[]; entries: Entry[]; summary: { total: number; destinations: Destination[]; people: Person[] } };
 type IncomeForm = { date: string; concept: string; personId: string; amount: string };
+type AuthState = "checking" | "locked" | "authenticated";
+
+class ApiError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message);
+  }
+}
 
 const euro = new Intl.NumberFormat("es-ES", { style: "currency", currency: "EUR" });
 const percent = new Intl.NumberFormat("es-ES", { style: "percent", maximumFractionDigits: 1 });
@@ -28,11 +35,15 @@ const today = () => {
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${apiRoot()}${path}`, { ...init, headers: { "Content-Type": "application/json", ...init?.headers } });
   const payload = await response.json() as T & { error?: string };
-  if (!response.ok) throw new Error(payload.error ?? "No se pudo completar la operación.");
+  if (!response.ok) throw new ApiError(payload.error ?? "No se pudo completar la operación.", response.status);
   return payload;
 }
 
 export function App() {
+  const [authState, setAuthState] = useState<AuthState>("checking");
+  const [pin, setPin] = useState("");
+  const [pinError, setPinError] = useState("");
+  const [pinSubmitting, setPinSubmitting] = useState(false);
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
   const [data, setData] = useState<Bootstrap | null>(null);
   const [loading, setLoading] = useState(true);
@@ -57,13 +68,25 @@ export function App() {
         setForm((current) => ({ ...current, personId: String(result.people[0].id) }));
       }
     } catch (problem) {
+      if (problem instanceof ApiError && problem.status === 401) {
+        setAuthState("locked");
+        setData(null);
+        return;
+      }
       setError(problem instanceof Error ? problem.message : "No se pudieron cargar los datos.");
     } finally {
       setLoading(false);
     }
   }, [selectedYear, form.personId]);
 
-  useEffect(() => { void load(selectedYear); }, [selectedYear]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    let active = true;
+    void api<{ ok: boolean }>("/session")
+      .then(() => { if (active) setAuthState("authenticated"); })
+      .catch(() => { if (active) setAuthState("locked"); });
+    return () => { active = false; };
+  }, []);
+  useEffect(() => { if (authState === "authenticated") void load(selectedYear); }, [selectedYear, authState]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     setRuleForm((current) => ({ ...current, dateFrom: `${selectedYear}-01-01`, dateTo: `${selectedYear}-12-31` }));
   }, [selectedYear]);
@@ -142,7 +165,23 @@ export function App() {
     catch (problem) { setError(problem instanceof Error ? problem.message : "No se pudo eliminar la regla."); }
   };
 
+  const unlock = async (event: FormEvent) => {
+    event.preventDefault();
+    setPinSubmitting(true);
+    setPinError("");
+    try {
+      await api<{ ok: boolean }>("/login", { method: "POST", body: JSON.stringify({ pin }) });
+      setPin("");
+      setAuthState("authenticated");
+    } catch (problem) {
+      setPinError(problem instanceof Error ? problem.message : "No se pudo comprobar el PIN.");
+    } finally {
+      setPinSubmitting(false);
+    }
+  };
+
   useEffect(() => {
+    if (authState !== "authenticated") return;
     const context = document.modelContext;
     if (!context?.registerTool) return;
     const lifecycle = new AbortController();
@@ -160,7 +199,45 @@ export function App() {
     };
     void register().catch(() => undefined);
     return () => lifecycle.abort();
-  }, [data, selectedYear, activeDestinations, load]);
+  }, [authState, data, selectedYear, activeDestinations, load]);
+
+  if (authState !== "authenticated") {
+    return (
+      <main className="auth-shell">
+        <section className="auth-card" aria-labelledby="access-title">
+          <div className="auth-mark"><Landmark size={28} /></div>
+          <p className="eyebrow">Aportes comunes</p>
+          <h1 id="access-title">Acceso familiar</h1>
+          {authState === "checking" ? <p className="auth-copy">Comprobando acceso…</p> : <>
+            <p className="auth-copy">Introduce el PIN de 4 dígitos para continuar.</p>
+            <form className="pin-form" onSubmit={unlock}>
+              <label htmlFor="access-pin">PIN</label>
+              <div className="pin-input">
+                <KeyRound size={19} aria-hidden="true" />
+                <input
+                  id="access-pin"
+                  type="password"
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  pattern="[0-9]{4}"
+                  maxLength={4}
+                  required
+                  autoFocus
+                  value={pin}
+                  onChange={(event) => { setPin(event.target.value.replace(/\D/g, "")); setPinError(""); }}
+                  aria-invalid={Boolean(pinError)}
+                  aria-describedby={pinError ? "pin-error" : undefined}
+                  placeholder="••••"
+                />
+              </div>
+              {pinError && <p className="pin-error" id="pin-error" role="alert">{pinError}</p>}
+              <button className="primary-button" disabled={pinSubmitting || pin.length !== 4}>{pinSubmitting ? "Comprobando…" : "Entrar"}</button>
+            </form>
+          </>}
+        </section>
+      </main>
+    );
+  }
 
   return (
     <div className="app-shell">
