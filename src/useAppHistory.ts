@@ -6,6 +6,7 @@ export type NavigationEntry =
   | { view: "year-new"; year: number }
   | { view: "destination-new"; year: number }
   | { view: "destination-detail"; year: number; id: number }
+  | { view: "movement-detail"; year: number; id: number }
   | { view: "data"; year: number }
   | { view: "income-edit"; year: number; id: number };
 
@@ -20,6 +21,7 @@ const validViews = new Set<NavigationEntry["view"]>([
   "year-new",
   "destination-new",
   "destination-detail",
+  "movement-detail",
   "data",
   "income-edit",
 ]);
@@ -46,6 +48,7 @@ function readStack(value: unknown): NavigationEntry[] {
       return false;
     return item.view !== "rule-edit" &&
       item.view !== "destination-detail" &&
+      item.view !== "movement-detail" &&
       item.view !== "income-edit"
       ? true
       : Number.isInteger(item.id);
@@ -110,11 +113,19 @@ export function useAppHistory() {
     window.history.back();
   }, []);
 
+  const replace = useCallback((entry: NavigationEntry) => {
+    const current = stackRef.current;
+    const nextStack = current.length ? [...current.slice(0, -1), entry] : [entry];
+    stackRef.current = nextStack;
+    window.history.replaceState(stateWithStack(nextStack), "");
+    setStack(nextStack);
+  }, []);
+
   const clearCurrentEntry = useCallback(() => {
     stackRef.current = [];
     window.history.replaceState(stateWithStack([]), "");
     setStack([]);
   }, []);
 
-  return { stack, push, close, clearCurrentEntry };
+  return { stack, push, replace, close, clearCurrentEntry };
 }

@@ -108,3 +108,44 @@ main { max-width: 1240px; margin: 0 auto; padding-top: 40px; padding-right: max(
 .detail-movements b { color: var(--navy); font-size: 14px; }
 @keyframes detail-in { from { transform: translateX(28px); opacity: 0; } }
 @media (max-width: 620px) { .destination-detail { border-radius: 0; padding-top: calc(24px + env(safe-area-inset-top, 0px)); padding-right: max(17px, env(safe-area-inset-right, 0px)); padding-bottom: calc(38px + env(safe-area-inset-bottom, 0px)); padding-left: max(17px, env(safe-area-inset-left, 0px)); }.detail-hero { grid-template-columns: auto 1fr; }.detail-hero > strong { grid-column: 1/-1; font-size: 24px; }.detail-stats { grid-template-columns: 1fr; }.destination-rules { grid-template-columns: 1fr; }.month-chart { gap: 5px; overflow-x: auto; overscroll-behavior-inline: contain; grid-template-columns: repeat(12,64px); padding-top: 28px; }.month-column > span { overflow: visible; font-size: 9px; text-overflow: clip; }.detail-heading { align-items: start; gap: 12px; } }
+
+.movement-row { cursor: pointer; transition: background .15s; }
+.movement-row:hover,.movement-row:focus-visible { background: #f5f9fa; outline: 0; }
+.movement-mobile-meta,.movement-mobile-chevron { display: none; }
+.movement-modal { width: min(520px,100%); }
+.movement-modal-date { margin: -2px 0 22px; color: #748899; font-size: 14px; }
+.movement-main-details { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 0 0 22px; }
+.movement-main-details > div { padding: 14px; border: 1px solid var(--line); border-radius: 12px; background: #f8fafb; }
+.movement-main-details dt { margin-bottom: 7px; color: #7b8d9c; font-size: 12px; }
+.movement-main-details dd { margin: 0; color: var(--navy); font: 700 16px Manrope,sans-serif; }
+.movement-allocation-details { padding: 17px; border-radius: 14px; background: #f4f8f9; border: 1px solid #e2eaee; }
+.movement-allocation-details > p { margin-bottom: 8px; }
+.movement-allocation-details > div { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 10px 0; border-bottom: 1px solid #dfe8ec; color: #60768a; }
+.movement-allocation-details > div span { display: inline-flex; align-items: center; gap: 9px; }
+.movement-allocation-details i { width: 8px; height: 8px; border-radius: 50%; }
+.movement-allocation-details strong { color: var(--navy); }
+.movement-allocation-details .movement-allocation-total { padding-bottom: 0; border-bottom: 0; color: var(--navy); font-weight: 700; }
+.movement-allocation-total strong { font: 700 19px Manrope,sans-serif; }
+.movement-modal-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 16px; }
+.movement-modal-actions button { min-height: 45px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; border-radius: 11px; font-weight: 700; }
+.movement-edit-button { border: 0; background: var(--navy); color: #fff; }
+.movement-edit-button:hover { background: #183656; }
+.movement-delete-button { border: 1px solid #ffd1c9; background: #fff7f5; color: #b44c3e; }
+.movement-delete-button:hover { background: #fff0ed; }
+
+@media (max-width: 620px) {
+  .movements-panel { padding-right: 12px; padding-left: 12px; }
+  .movements-panel .panel-title { padding: 0 7px; }
+  .table-wrap { overflow-x: visible; }
+  .movements-table { table-layout: fixed; }
+  .movements-table thead { display: none; }
+  .movements-table .movement-date-column,.movements-table .movement-person-column,.movements-table .movement-detail-column,.movements-table .movement-actions-column { display: none; }
+  .movements-table .movement-summary-column { width: auto; padding: 15px 6px; white-space: normal; }
+  .movements-table .movement-total-column { width: 118px; padding: 15px 4px; text-align: right; }
+  .movement-concept,.movement-mobile-meta { display: block; overflow: hidden; text-overflow: ellipsis; }
+  .movement-concept { color: var(--navy); font-weight: 700; white-space: nowrap; }
+  .movement-mobile-meta { margin-top: 5px; color: #8192a1; font-size: 11px; font-weight: 500; white-space: nowrap; }
+  .movement-total-column strong { vertical-align: middle; }
+  .movement-mobile-chevron { display: inline; margin-left: 5px; color: #9aabb7; vertical-align: middle; }
+  .movement-main-details { grid-template-columns: 1fr; }
+}

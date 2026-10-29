@@ -93,6 +93,11 @@ const day = new Intl.DateTimeFormat("es-ES", {
   day: "2-digit",
   month: "short",
 });
+const fullDate = new Intl.DateTimeFormat("es-ES", {
+  day: "numeric",
+  month: "long",
+  year: "numeric",
+});
 const month = new Intl.DateTimeFormat("es-ES", { month: "short" });
 const destinationColors = ["#20b99a", "#4a7ef0", "#f1a24d", "#a16ae8", "#eb6ca4", "#6c8da5"];
 const apiRoot = () => (window.location.pathname.startsWith("/aportescomunes") ? "/aportescomunes/api" : "/api");
@@ -165,7 +170,7 @@ export function App() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [toast, setToast] = useState("");
-  const { stack: navigationStack, push: pushNavigation, close: closeNavigation, clearCurrentEntry } = useAppHistory();
+  const { stack: navigationStack, push: pushNavigation, replace: replaceNavigation, close: closeNavigation, clearCurrentEntry } = useAppHistory();
   const [importRows, setImportRows] = useState<ImportedIncome[]>([]);
   const [importFileName, setImportFileName] = useState("");
   const [importError, setImportError] = useState("");
@@ -197,6 +202,7 @@ export function App() {
   const destinationOpen = Boolean(findNavigation("destination-new"));
   const dataOpen = Boolean(findNavigation("data"));
   const selectedDestinationId = findNavigation("destination-detail")?.id ?? null;
+  const selectedMovementId = findNavigation("movement-detail")?.id ?? null;
   const editingId = findNavigation("income-edit")?.id ?? null;
   const editingRuleId = findNavigation("rule-edit")?.id ?? null;
 
@@ -332,6 +338,7 @@ export function App() {
   }, [data, form.date, form.personId, numericAmount]);
   const previewTotal = allocations.reduce((sum, item) => sum + item.value, 0);
   const activeDestinations = useMemo(() => data?.summary.destinations.filter((destination) => (destination.total ?? 0) > 0 || data.rules.some((rule) => rule.destination_id === destination.id)) ?? [], [data]);
+  const selectedMovement = data?.entries.find((entry) => entry.id === selectedMovementId) ?? null;
   const destinationDetail = useMemo(() => {
     if (!data || selectedDestinationId === null) return null;
     const destination = data.summary.destinations.find((item) => item.id === selectedDestinationId);
@@ -409,13 +416,15 @@ export function App() {
   };
 
   const deleteIncome = async (entry: Entry) => {
-    if (!window.confirm(`¿Eliminar “${entry.concept}” de ${entry.person_name}?`)) return;
+    if (!window.confirm(`¿Eliminar “${entry.concept}” de ${entry.person_name}?`)) return false;
     try {
       await api(`/incomes/${entry.id}`, { method: "DELETE" });
       setToast("Movimiento eliminado");
       await load(selectedYear);
+      return true;
     } catch (problem) {
       setError(problem instanceof Error ? problem.message : "No se pudo eliminar.");
+      return false;
     }
   };
 
@@ -966,15 +975,15 @@ export function App() {
                 </div>
                 {data.entries.length ? (
                   <div className="table-wrap">
-                    <table>
+                    <table className="movements-table">
                       <thead>
                         <tr>
-                          <th>Fecha</th>
-                          <th>Concepto</th>
-                          <th>Quién</th>
-                          <th>Ganado</th>
+                          <th className="movement-date-column">Fecha</th>
+                          <th className="movement-summary-column">Concepto</th>
+                          <th className="movement-person-column">Quién</th>
+                          <th className="movement-detail-column">Ganado</th>
                           {activeDestinations.map((destination) => (
-                            <th key={destination.id}>{destination.name}</th>
+                            <th className="movement-detail-column" key={destination.id}>{destination.name}</th>
                           ))}
                           <th>Total</th>
                           <th>
@@ -984,25 +993,44 @@ export function App() {
                       </thead>
                       <tbody>
                         {data.entries.map((entry) => (
-                          <tr key={entry.id}>
-                            <td>{day.format(new Date(`${entry.income_date}T12:00:00`))}</td>
-                            <td>{entry.concept}</td>
-                            <td>
+                          <tr
+                            key={entry.id}
+                            className="movement-row"
+                            tabIndex={0}
+                            aria-haspopup="dialog"
+                            aria-label={`Ver todos los datos de ${entry.concept}`}
+                            onClick={() => openNavigation({ view: "movement-detail", id: entry.id })}
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter" || event.key === " ") {
+                                event.preventDefault();
+                                openNavigation({ view: "movement-detail", id: entry.id });
+                              }
+                            }}
+                          >
+                            <td className="movement-date-column">{day.format(new Date(`${entry.income_date}T12:00:00`))}</td>
+                            <td className="movement-summary-column">
+                              <span className="movement-concept">{entry.concept}</span>
+                              <span className="movement-mobile-meta">
+                                {day.format(new Date(`${entry.income_date}T12:00:00`))} · {entry.person_name}
+                              </span>
+                            </td>
+                            <td className="movement-person-column">
                               <span className={`person ${entry.person_name.toLowerCase()}`}>{entry.person_name}</span>
                             </td>
-                            <td>{euro.format(entry.amount)}</td>
+                            <td className="movement-detail-column">{euro.format(entry.amount)}</td>
                             {activeDestinations.map((destination) => (
-                              <td key={destination.id}>{euro.format(entry.allocations[String(destination.id)] ?? 0)}</td>
+                              <td className="movement-detail-column" key={destination.id}>{euro.format(entry.allocations[String(destination.id)] ?? 0)}</td>
                             ))}
-                            <td>
+                            <td className="movement-total-column">
                               <strong>{euro.format(entry.contribution)}</strong>
+                              <ChevronRight className="movement-mobile-chevron" size={17} aria-hidden="true" />
                             </td>
-                            <td>
+                            <td className="movement-actions-column">
                               <div className="row-actions">
-                                <button onClick={() => editIncome(entry)} aria-label={`Editar ${entry.concept}`}>
+                                <button onClick={(event) => { event.stopPropagation(); editIncome(entry); }} aria-label={`Editar ${entry.concept}`}>
                                   <Pencil size={15} />
                                 </button>
-                                <button onClick={() => void deleteIncome(entry)} aria-label={`Eliminar ${entry.concept}`}>
+                                <button onClick={(event) => { event.stopPropagation(); void deleteIncome(entry); }} aria-label={`Eliminar ${entry.concept}`}>
                                   <Trash2 size={15} />
                                 </button>
                               </div>
@@ -1024,6 +1052,64 @@ export function App() {
           )
         )}
       </main>
+
+      {selectedMovement && topNavigation?.view === "movement-detail" && (
+        <div
+          className="modal-backdrop"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.currentTarget === event.target) closeNavigation("movement-detail");
+          }}
+        >
+          <section className="modal movement-modal" role="dialog" aria-modal="true" aria-labelledby="movement-detail-title">
+            <button className="modal-close" onClick={() => closeNavigation("movement-detail")} aria-label="Cerrar">
+              <X size={19} />
+            </button>
+            <p className="eyebrow">Detalle del movimiento</p>
+            <h2 id="movement-detail-title">{selectedMovement.concept}</h2>
+            <p className="movement-modal-date">{fullDate.format(new Date(`${selectedMovement.income_date}T12:00:00`))}</p>
+            <dl className="movement-main-details">
+              <div>
+                <dt>Quién</dt>
+                <dd><span className={`person ${selectedMovement.person_name.toLowerCase()}`}>{selectedMovement.person_name}</span></dd>
+              </div>
+              <div>
+                <dt>Importe ganado</dt>
+                <dd>{euro.format(selectedMovement.amount)}</dd>
+              </div>
+            </dl>
+            <div className="movement-allocation-details">
+              <p className="eyebrow">Reparto del aporte</p>
+              {activeDestinations.map((destination) => (
+                <div key={destination.id}>
+                  <span><i style={{ background: destination.color }} />{destination.name}</span>
+                  <strong>{euro.format(selectedMovement.allocations[String(destination.id)] ?? 0)}</strong>
+                </div>
+              ))}
+              <div className="movement-allocation-total">
+                <span>Total aportado</span>
+                <strong>{euro.format(selectedMovement.contribution)}</strong>
+              </div>
+            </div>
+            <div className="movement-modal-actions">
+              <button
+                className="movement-edit-button"
+                onClick={() => replaceNavigation({ view: "income-edit", year: selectedYear, id: selectedMovement.id })}
+              >
+                <Pencil size={16} /> Editar
+              </button>
+              <button
+                className="movement-delete-button"
+                onClick={async () => {
+                  if (await deleteIncome(selectedMovement)) closeNavigation("movement-detail");
+                }}
+              >
+                <Trash2 size={16} /> Eliminar
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
 
       {rulesOpen && !destinationOpen && data && (
         <div
