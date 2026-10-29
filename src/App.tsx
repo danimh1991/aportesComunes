@@ -1022,7 +1022,11 @@ export function App() {
                               <td className="movement-detail-column" key={destination.id}>{euro.format(entry.allocations[String(destination.id)] ?? 0)}</td>
                             ))}
                             <td className="movement-total-column">
-                              <strong>{euro.format(entry.contribution)}</strong>
+                              <strong className="movement-desktop-total">{euro.format(entry.contribution)}</strong>
+                              <span className="movement-mobile-amount">
+                                <strong>{euro.format(entry.amount)}</strong>
+                                <small>ingresado</small>
+                              </span>
                               <ChevronRight className="movement-mobile-chevron" size={17} aria-hidden="true" />
                             </td>
                             <td className="movement-actions-column">
